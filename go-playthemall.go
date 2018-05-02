@@ -3,7 +3,7 @@ package main
 import (
 	"flag"
 	"fmt"
-	"libretro"
+	"github.com/RobLoach/go-libretro/libretro"
 	"log"
 	"os"
 	"runtime"

@@ -3,7 +3,7 @@ package main
 import (
 	"fmt"
 	"io/ioutil"
-	"libretro"
+	"github.com/RobLoach/go-libretro/libretro"
 )
 
 type menuCallback func()

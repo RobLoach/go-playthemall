@@ -2,7 +2,7 @@ package main
 
 import (
 	"fmt"
-	"libretro"
+	"github.com/RobLoach/go-libretro/libretro"
 
 	"github.com/go-gl/glfw/v3.2/glfw"
 )
