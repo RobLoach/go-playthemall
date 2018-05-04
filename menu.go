@@ -3,7 +3,7 @@ package main
 import (
 	"fmt"
 	"io/ioutil"
-	"libretro"
+	"github.com/RobLoach/go-libretro/libretro"
 
 	"github.com/tanema/gween"
 	"github.com/tanema/gween/ease"
