@@ -1,6 +1,6 @@
 package main
 
-import "libretro"
+import "github.com/RobLoach/go-libretro/libretro"
 
 // Joypad bindings fox Xbox360 pad on OSX
 var joyBinds = map[bind]uint32{
