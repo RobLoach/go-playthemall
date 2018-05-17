@@ -11,9 +11,13 @@ import (
 	"github.com/go-gl/glfw/v3.2/glfw"
 )
 
-var core libretro.Core
-
-var menuActive bool
+// global state
+var g struct {
+	core        libretro.Core
+	coreRunning bool
+	menuActive  bool
+	gamePath    string
+}
 
 func init() {
 	// GLFW event handling must run on the main OS thread
@@ -33,15 +37,36 @@ func nanoLog(level uint32, str string) {
 }
 
 func coreLoad(sofile string) {
-	core, _ = libretro.Load(sofile)
-	core.SetEnvironment(environment)
-	core.SetVideoRefresh(videoRefresh)
-	core.SetInputPoll(inputPoll)
-	core.SetInputState(inputState)
-	core.SetAudioSample(audioSample)
-	core.SetAudioSampleBatch(audioSampleBatch)
-	core.Init()
-	fmt.Println("Libretro API version:", core.APIVersion())
+	if g.coreRunning {
+		g.core.UnloadGame()
+		g.core.Deinit()
+		g.gamePath = ""
+	}
+
+	g.core, _ = libretro.Load(sofile)
+	g.core.SetEnvironment(environment)
+	g.core.SetVideoRefresh(videoRefresh)
+	g.core.SetInputPoll(inputPoll)
+	g.core.SetInputState(inputState)
+	g.core.SetAudioSample(audioSample)
+	g.core.SetAudioSampleBatch(audioSampleBatch)
+	g.core.Init()
+
+	// Append the library name to the window title.
+	si := g.core.GetSystemInfo()
+	if len(si.LibraryName) > 0 {
+		if window != nil {
+			window.SetTitle("Play Them All - " + si.LibraryName)
+		}
+		fmt.Println("[Libretro]: Name:", si.LibraryName)
+		fmt.Println("[Libretro]: Version:", si.LibraryVersion)
+		fmt.Println("[Libretro]: Valid extensions:", si.ValidExtensions)
+		fmt.Println("[Libretro]: Need fullpath:", si.NeedFullpath)
+		fmt.Println("[Libretro]: Block extract:", si.BlockExtract)
+	}
+
+	notify("Core loaded: "+si.LibraryName, 240)
+	fmt.Println("[Libretro]: API version:", g.core.APIVersion())
 }
 
 func coreLoadGame(filename string) {
@@ -57,45 +82,49 @@ func coreLoadGame(filename string) {
 
 	size := fi.Size()
 
-	fmt.Println("ROM size:", size)
+	fmt.Println("[Libretro]: ROM size:", size)
 
 	gi := libretro.GameInfo{
 		Path: filename,
 		Size: size,
 	}
 
-	si := core.GetSystemInfo()
-
-	fmt.Println("  library_name:", si.LibraryName)
-	fmt.Println("  library_version:", si.LibraryVersion)
-	fmt.Println("  valid_extensions:", si.ValidExtensions)
-	fmt.Println("  need_fullpath:", si.NeedFullpath)
-	fmt.Println("  block_extract:", si.BlockExtract)
+	si := g.core.GetSystemInfo()
 
 	if !si.NeedFullpath {
-		bytes, err := slurp(filename, size)
+		bytes, err := slurp(filename)
 		if err != nil {
 			panic(err)
 		}
 		gi.SetData(bytes)
 	}
 
-	ok := core.LoadGame(gi)
+	ok := g.core.LoadGame(gi)
 	if !ok {
-		log.Fatal("The core failed to load the content.")
+		notify("The core failed to load the content.", 240)
+		fmt.Println("[Libretro]: The core failed to load the content.")
+		g.coreRunning = false
+		return
 	}
 
-	avi := core.GetSystemAVInfo()
+	avi := g.core.GetSystemAVInfo()
 
-	// Create the video window, not-fullscreen.
-	videoConfigure(avi.Geometry, false)
+	// Create the video window
+	videoConfigure(avi.Geometry, settings.VideoFullscreen)
 
 	// Append the library name to the window title.
 	if len(si.LibraryName) > 0 {
-		window.SetTitle("playthemall - " + si.LibraryName)
+		window.SetTitle("Play Them All - " + si.LibraryName)
 	}
+
 	inputInit()
 	audioInit(int32(avi.Timing.SampleRate))
+
+	g.coreRunning = true
+	g.menuActive = false
+	g.gamePath = filename
+	menuInit()
+	notify("Game loaded: "+filename, 240)
 }
 
 func main() {
@@ -107,9 +136,12 @@ func main() {
 	if len(args) > 0 {
 		gamePath = args[0]
 	}
-	if (len(*corePath) == 0 || len(gamePath) == 0) {
-		log.Fatalln("Usage: go-playthemall -L <core> <game>")
-		return
+
+	err := loadSettings()
+	if err != nil {
+		fmt.Println("[Settings]: Loading failed:", err)
+		fmt.Println("[Settings]: Using default settings")
+		saveSettings()
 	}
 
 	if err := glfw.Init(); err != nil {
@@ -117,14 +149,32 @@ func main() {
 	}
 	defer glfw.Terminate()
 
-	coreLoad(*corePath)
-	coreLoadGame(gamePath)
-	menuInit()
+	if len(*corePath) > 0 {
+		coreLoad(*corePath)
+	}
+
+	if len(gamePath) > 0 {
+		coreLoadGame(gamePath)
+	}
+
+	// No game running? display the menu with a dummy geometry
+	if !g.coreRunning {
+		geom := libretro.GameGeometry{
+			AspectRatio: 320.0 / 240.0,
+			BaseWidth:   320,
+			BaseHeight:  240,
+		}
+		videoConfigure(geom, settings.VideoFullscreen)
+		menuInit()
+		g.menuActive = true
+	}
 
 	for !window.ShouldClose() {
 		glfw.PollEvents()
-		if !menuActive {
-			core.Run()
+		if !g.menuActive {
+			if g.coreRunning {
+				g.core.Run()
+			}
 			videoRender()
 		} else {
 			inputPoll()
@@ -136,6 +186,8 @@ func main() {
 	}
 
 	// Unload and deinit in the core.
-	core.UnloadGame()
-	core.Deinit()
+	if g.coreRunning {
+		g.core.UnloadGame()
+		g.core.Deinit()
+	}
 }

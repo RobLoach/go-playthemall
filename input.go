@@ -2,14 +2,19 @@ package main
 
 import (
 	"fmt"
-	"github.com/RobLoach/go-libretro/libretro"
 
+	"github.com/RobLoach/go-libretro/libretro"
 	"github.com/go-gl/glfw/v3.2/glfw"
 )
 
 const numPlayers = 5
-const menuActionMenuToggle uint32 = 16
-const menuActionFullscreenToggle uint32 = 17
+
+const (
+	menuActionMenuToggle       uint32 = libretro.DeviceIDJoypadR3 + 1
+	menuActionFullscreenToggle uint32 = libretro.DeviceIDJoypadR3 + 2
+	menuActionShouldClose      uint32 = libretro.DeviceIDJoypadR3 + 3
+	menuActionLast             uint32 = libretro.DeviceIDJoypadR3 + 4
+)
 
 var keyBinds = map[glfw.Key]uint32{
 	glfw.KeyX:         libretro.DeviceIDJoypadA,
@@ -22,32 +27,29 @@ var keyBinds = map[glfw.Key]uint32{
 	glfw.KeyRight:     libretro.DeviceIDJoypadRight,
 	glfw.KeyEnter:     libretro.DeviceIDJoypadStart,
 	glfw.KeyBackspace: libretro.DeviceIDJoypadSelect,
+	glfw.KeyP:         menuActionMenuToggle,
+	glfw.KeyF:         menuActionFullscreenToggle,
+	glfw.KeyEscape:    menuActionShouldClose,
 }
 
-var buttonBinds = map[byte]uint32{
-	0:  libretro.DeviceIDJoypadUp,
-	1:  libretro.DeviceIDJoypadDown,
-	2:  libretro.DeviceIDJoypadLeft,
-	3:  libretro.DeviceIDJoypadRight,
-	4:  libretro.DeviceIDJoypadStart,
-	5:  libretro.DeviceIDJoypadSelect,
-	6:  libretro.DeviceIDJoypadL3,
-	7:  libretro.DeviceIDJoypadR3,
-	8:  libretro.DeviceIDJoypadL,
-	9:  libretro.DeviceIDJoypadR,
-	10: menuActionMenuToggle, // Special case
-	11: libretro.DeviceIDJoypadB,
-	12: libretro.DeviceIDJoypadA,
-	13: libretro.DeviceIDJoypadY,
-	14: libretro.DeviceIDJoypadX,
+const btn = 0
+const axis = 1
+
+type bind struct {
+	kind      uint32
+	index     uint32
+	direction float32
+	threshold float32
 }
+
+type inputstate [numPlayers][menuActionLast]bool
 
 // Input state for all the players
 var (
-	newState [numPlayers][libretro.DeviceIDJoypadR3 + 3]bool
-	oldState [numPlayers][libretro.DeviceIDJoypadR3 + 3]bool
-	released [numPlayers][libretro.DeviceIDJoypadR3 + 3]bool
-	pressed  [numPlayers][libretro.DeviceIDJoypadR3 + 3]bool
+	newState inputstate // input state for the current frame
+	oldState inputstate // input state for the previous frame
+	released inputstate // keys just released during this frame
+	pressed  inputstate // keys just pressed during this frame
 )
 
 func joystickCallback(joy int, event int) {
@@ -63,70 +65,88 @@ func joystickCallback(joy int, event int) {
 		message = fmt.Sprintf("Joystick #%d unhandled event: %d.", joy, event)
 	}
 	fmt.Printf("[Input]: %s\n", message)
-	notify(message, 120)
+	notify(message, 240)
 }
 
 func inputInit() {
 	glfw.SetJoystickCallback(joystickCallback)
 }
 
-func inputPoll() {
-	// Reset all retropad buttons to false
-	for p := range newState {
-		for k := range newState[p] {
-			newState[p][k] = false
+// Reset all retropad buttons to false
+func inputPollReset(state inputstate) inputstate {
+	for p := range state {
+		for k := range state[p] {
+			state[p][k] = false
 		}
 	}
+	return state
+}
 
-	// Process joypads of all players
-	for p := range newState {
+// Process joypads of all players
+func inputPollJoypads(state inputstate) inputstate {
+	for p := range state {
 		buttonState := glfw.GetJoystickButtons(glfw.Joystick(p))
+		axisState := glfw.GetJoystickAxes(glfw.Joystick(p))
 		if len(buttonState) > 0 {
-			for k, v := range buttonBinds {
-				if glfw.Action(buttonState[k]) == glfw.Press {
-					newState[p][v] = true
+			for k, v := range joyBinds {
+				switch k.kind {
+				case btn:
+					if glfw.Action(buttonState[k.index]) == glfw.Press {
+						state[p][v] = true
+					}
+				case axis:
+					if k.direction*axisState[k.index] > k.threshold*k.direction {
+						state[p][v] = true
+					}
 				}
 			}
 		}
 	}
+	return state
+}
 
-	// Process keyboard keys
+// Process keyboard keys
+func inputPollKeyboard(state inputstate) inputstate {
 	for k, v := range keyBinds {
 		if window.GetKey(k) == glfw.Press {
-			newState[0][v] = true
+			state[0][v] = true
 		}
 	}
+	return state
+}
 
-	// Close on escape
-	if window.GetKey(glfw.KeyEscape) == glfw.Press {
-		window.SetShouldClose(true)
-	}
-
-	// Toggle menu when P is pressed
-	if window.GetKey(glfw.KeyP) == glfw.Press {
-		newState[0][menuActionMenuToggle] = true
-	}
-
-	if window.GetKey(glfw.KeyF) == glfw.Press {
-		newState[0][menuActionFullscreenToggle] = true
-	}
-
-	// Compute the keys pressed or released during this frame
-	for p := range newState {
-		for k := range newState[p] {
-			pressed[p][k] = newState[p][k] && !oldState[p][k]
-			released[p][k] = !newState[p][k] && oldState[p][k]
+// Compute the keys pressed or released during this frame
+func inputGetPressedReleased(new inputstate, old inputstate) (inputstate, inputstate) {
+	for p := range new {
+		for k := range new[p] {
+			pressed[p][k] = new[p][k] && !old[p][k]
+			released[p][k] = !new[p][k] && old[p][k]
 		}
 	}
+	return pressed, released
+}
+
+func inputPoll() {
+	newState = inputPollReset(newState)
+	newState = inputPollJoypads(newState)
+	newState = inputPollKeyboard(newState)
+	pressed, released = inputGetPressedReleased(newState, oldState)
 
 	// Toggle the menu if menuActionMenuToggle is pressed
-	if released[0][menuActionMenuToggle] {
-		menuActive = !menuActive
+	if released[0][menuActionMenuToggle] && g.coreRunning {
+		g.menuActive = !g.menuActive
 	}
 
 	// Toggle fullscreen if menuActionFullscreenToggle is pressed
 	if released[0][menuActionFullscreenToggle] {
-		toggleFullscreen()
+		settings.VideoFullscreen = !settings.VideoFullscreen
+		videoConfigure(video.geom, settings.VideoFullscreen)
+		saveSettings()
+	}
+
+	// Close on escape
+	if pressed[0][menuActionShouldClose] {
+		window.SetShouldClose(true)
 	}
 
 	// Store the old input state for comparisions
